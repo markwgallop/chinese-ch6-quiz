@@ -139,8 +139,9 @@ const VOCAB_REVIEW = [
   {zh:"不少",        py:"bù shǎo",                en:"not a few"},
 ];
 
-const MODES_CH7   = ['flash','choose','match','sentence','write','speak'];
-const MODES_REVIEW = ['flash','choose','match'];
+const MODES_CH7      = ['flash','choose','match','sentence','write','speak'];
+const MODES_REVIEW   = ['flash','choose','match'];
+const MODES_MISTAKES = ['flash','choose','match','write','speak'];
 const MODE_LABELS  = {flash:"🃏 Flash Cards", choose:"🎯 Pick Meaning", match:"🔗 Match Pairs", sentence:"📖 Sentences", write:"✍️ Write It", speak:"🎤 Say It"};
 const MODE_DESC    = {flash:"Tap to flip & hear", choose:"4 choices", match:"Connect 5 pairs", sentence:"Full phrases", write:"Draw the character", speak:"Speak the Chinese word"};
 
@@ -190,9 +191,14 @@ function shuffle(arr) {
 const getWrong      = (cur, pool, key, n=3) => shuffle(pool.filter(w => w[key] !== cur[key])).slice(0, n);
 const el            = id => document.getElementById(id);
 const vibrate       = p  => { try { navigator.vibrate?.(p); } catch {} };
-const currentVocab  = () => state.tab === 'ch7' ? VOCAB_CH7 : VOCAB_REVIEW;
-const currentModes  = () => state.tab === 'ch7' ? MODES_CH7 : MODES_REVIEW;
-const allDone       = tab => currentModes().every(m => state.completed[tab][m]);
+const getMistakeWords = () => [
+  ...VOCAB_CH7.filter(w    => state.mistakes.ch7.includes(w.zh)),
+  ...VOCAB_REVIEW.filter(w => state.mistakes.review.includes(w.zh)),
+];
+const totalMistakes   = () => state.mistakes.ch7.length + state.mistakes.review.length;
+const currentVocab    = () => state.tab === 'mistakes' ? getMistakeWords() : state.tab === 'ch7' ? VOCAB_CH7 : VOCAB_REVIEW;
+const currentModes    = () => state.tab === 'mistakes' ? MODES_MISTAKES : state.tab === 'ch7' ? MODES_CH7 : MODES_REVIEW;
+const allDone         = tab => tab === 'mistakes' ? false : currentModes().every(m => state.completed[tab]?.[m]);
 
 // ── Tone colouring ────────────────────────────────────────────────────────────
 const DIACRITIC_TONE = {
@@ -288,10 +294,12 @@ function saveSession(mode, score, total) {
   S.set('sess_'+Date.now(), {mode, score, total, ts:Date.now(), tab:state.tab});
 }
 function markDone(mode) {
+  if (state.tab === 'mistakes') return;
   state.completed[state.tab][mode] = true;
   S.set('comp_'+state.tab, state.completed[state.tab]);
 }
 function addXp(n) {
+  if (state.tab === 'mistakes') return;
   state.xp[state.tab] += n;
   S.set('xp_'+state.tab, state.xp[state.tab]);
 }
@@ -330,10 +338,59 @@ function submitName() {
 function renderHome() {
   state.screen = 'home';
   const {tab, playerName} = state;
-  const xp = state.xp[tab];
+  const isMistakes = tab === 'mistakes';
+  const xp   = isMistakes ? null : state.xp[tab];
   const modes = currentModes();
-  const done = allDone(tab);
+  const done  = allDone(tab);
+  const mCount = totalMistakes();
 
+  // Mistakes tab content
+  if (isMistakes) {
+    const words = getMistakeWords();
+    el('root').innerHTML = `
+      <div class="screen bounce-in">
+        <div style="width:100%">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-size:13px;font-weight:800;color:#dc2626">🔁 Mistake words</span>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button onclick="renderNameScreen()" style="background:none;border:none;font-size:11px;color:#d1d5db;font-weight:700;padding:0">${playerName} ✎</button>
+              <button onclick="renderHistory()" style="background:none;border:2px solid #bfdbfe!important;border-radius:10px;padding:4px 12px;font-size:12px;color:#9ca3af;font-weight:700">History</button>
+            </div>
+          </div>
+        </div>
+        <div class="tab-row">
+          <button class="tab-btn" onclick="switchTab('ch7')" style="font-size:11px">📖 第七课</button>
+          <button class="tab-btn" onclick="switchTab('review')" style="font-size:11px">🔄 复习</button>
+          <button class="tab-btn active" style="font-size:11px">🔁 Mistakes</button>
+        </div>
+        <div style="font-size:56px">🔁</div>
+        <div style="text-align:center">
+          <h1 style="font-size:26px;font-weight:900;color:#dc2626">Mistake Words</h1>
+          <p style="font-size:13px;color:#78716c;margin-top:2px">${words.length} word${words.length!==1?'s':''} to review · all modes</p>
+        </div>
+        ${words.length ? `
+          <div style="width:100%;background:#fff5f5;border:2px solid #fca5a5;border-radius:16px;padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px">
+            ${words.map(w => `<span style="font-family:'Noto Sans SC',sans-serif;font-size:18px;background:#fff;border:1.5px solid #fca5a5;border-radius:8px;padding:4px 10px">${w.zh}</span>`).join('')}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px;align-items:center;width:100%">
+            ${modes.map(m => `
+              <button class="mode-btn" onclick="startQuiz('${m}')" style="border-color:#fca5a5!important">
+                <div>
+                  <div class="mode-btn-title">${MODE_LABELS[m]}</div>
+                  <div class="mode-btn-sub" style="color:#f87171">${MODE_DESC[m]}</div>
+                </div>
+              </button>`).join('')}
+            <button onclick="clearMistakes()" style="background:none;border:none;font-size:13px;color:#fca5a5;font-weight:700;margin-top:4px">Clear all mistakes ✕</button>
+          </div>` : `
+          <div style="text-align:center;color:#9ca3af;font-size:15px;font-weight:700;padding:24px 0">
+            No mistakes yet! 🎉<br>
+            <span style="font-size:13px;font-weight:500">Words you get wrong will appear here.</span>
+          </div>`}
+      </div>`;
+    return;
+  }
+
+  // Normal ch7 / review tab content
   el('root').innerHTML = `
     <div class="screen bounce-in">
       <div style="width:100%">
@@ -347,8 +404,11 @@ function renderHome() {
         ${renderXpBar(xp % 100)}
       </div>
       <div class="tab-row">
-        <button class="tab-btn${tab==='ch7'?' active':''}" onclick="switchTab('ch7')">📖 第七课</button>
-        <button class="tab-btn${tab==='review'?' active':''}" onclick="switchTab('review')">🔄 复习</button>
+        <button class="tab-btn${tab==='ch7'?' active':''}" onclick="switchTab('ch7')" style="font-size:11px">📖 第七课</button>
+        <button class="tab-btn${tab==='review'?' active':''}" onclick="switchTab('review')" style="font-size:11px">🔄 复习</button>
+        <button class="tab-btn${mCount?' ':'  '}" onclick="switchTab('mistakes')" style="font-size:11px;position:relative">
+          🔁 Mistakes${mCount ? `<span style="position:absolute;top:4px;right:6px;background:#ef4444;color:#fff;border-radius:99px;font-size:9px;font-weight:900;padding:1px 5px;line-height:1.4">${mCount}</span>` : ''}
+        </button>
       </div>
       <div style="font-size:56px">${tab==='ch7'?'🧠':'📚'}</div>
       <div style="text-align:center">
@@ -368,14 +428,6 @@ function renderHome() {
             </div>
             ${state.completed[tab][m]?'<span style="font-size:20px">✅</span>':''}
           </button>`).join('')}
-        ${state.mistakes[tab].length ? `
-          <button class="mode-btn" onclick="startDrill()" style="border-color:#fca5a5!important;background:#fff5f5">
-            <div>
-              <div class="mode-btn-title" style="color:#dc2626">🔁 Drill Mistakes</div>
-              <div class="mode-btn-sub" style="color:#f87171">${state.mistakes[tab].length} word${state.mistakes[tab].length!==1?'s':''} to review</div>
-            </div>
-            <button onclick="event.stopPropagation();clearMistakes()" style="background:none;border:none;font-size:18px;color:#fca5a5;padding:4px" title="Clear mistakes">✕</button>
-          </button>` : ''}
       </div>
     </div>`;
 }
@@ -399,9 +451,6 @@ function startQuiz(mode) {
     state.queue = shuffle(vocab);
   } else if (mode === 'match') {
     state.queue = [];
-  } else if (mode === 'drill') {
-    const mistakeWords = vocab.filter(w => state.mistakes[state.tab].includes(w.zh));
-    state.queue = shuffle(mistakeWords);
   } else {
     state.queue = shuffle(SENTENCES).slice(0, 3);
   }
@@ -422,7 +471,7 @@ function renderQuiz() {
       </div>
       <div id="qa" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:16px"></div>
       <div style="font-size:12px;color:#d1d5db;font-weight:600" id="counter">
-        ${state.mode === 'match' ? 'Match all 5 pairs' : state.mode === 'drill' ? `🔁 Drilling weak words` : `${state.current+1} / ${state.queue.length}`}
+        ${state.mode === 'match' ? `Match all ${matchPool.length} pairs` : `${state.current+1} / ${state.queue.length}`}
       </div>
     </div>`;
   renderQuestion();
@@ -437,9 +486,7 @@ function updateQuizHeader() {
   if (qs) qs.textContent = state.streak >= 3 ? `🔥${state.streak}` : `${state.score.correct}/${state.score.total}`;
   const ctr = el('counter');
   if (ctr) ctr.textContent = state.mode === 'match'
-    ? 'Match all 5 pairs'
-    : state.mode === 'drill'
-    ? '🔁 Drilling weak words'
+    ? `Match all ${matchPool.length} pairs`
     : `${state.current+1} / ${state.queue.length}`;
 }
 
@@ -448,7 +495,6 @@ function renderQuestion() {
   const w = queue[current];
   if      (mode === 'flash')    renderFlash(w);
   else if (mode === 'choose')   renderChoose(w);
-  else if (mode === 'drill')    renderChoose(w);
   else if (mode === 'match')    renderMatch();
   else if (mode === 'sentence') renderSentence(w);
   else if (mode === 'write')    renderWrite(w);
@@ -529,7 +575,12 @@ function pickChoice(idx) {
 let matchPool=[], matchZhCards=[], matchEnCards=[], matchSelZh=null, matchSelEn=null, matchMatched=[];
 
 function renderMatch() {
-  matchPool     = shuffle(currentVocab()).slice(0, 5);
+  const vocab = currentVocab();
+  if (vocab.length < 2) {
+    el('qa').innerHTML = `<div style="text-align:center;color:#9ca3af;font-size:14px;font-weight:700;padding:24px">Need at least 2 words to play Match.<br>Add more words to your mistakes list first.</div>`;
+    return;
+  }
+  matchPool     = shuffle(vocab).slice(0, Math.min(5, vocab.length));
   matchZhCards  = shuffle(matchPool.map(w => ({id:w.zh, val:w.zh})));
   matchEnCards  = shuffle(matchPool.map(w => ({id:w.en, val:w.en, pair:w.zh})));
   matchSelZh = null; matchSelEn = null; matchMatched = [];
@@ -915,24 +966,34 @@ function handleResult(correct) {
 }
 
 function updateMistakes() {
+  if (state.tab === 'mistakes') {
+    // Update both sub-lists based on which vocab pool each word belongs to
+    ['ch7', 'review'].forEach(key => {
+      const vocab = key === 'ch7' ? VOCAB_CH7 : VOCAB_REVIEW;
+      const zhs = new Set(vocab.map(w => w.zh));
+      let m = [...state.mistakes[key]];
+      state.sessionWrong.forEach(zh   => { if (zhs.has(zh) && !m.includes(zh)) m.push(zh); });
+      state.sessionCorrect.forEach(zh => { if (zhs.has(zh)) m = m.filter(x => x !== zh); });
+      state.mistakes[key] = m;
+      S.set('mistakes_' + key, m);
+    });
+    return;
+  }
   let m = [...state.mistakes[state.tab]];
-  // Add newly wrong words
-  state.sessionWrong.forEach(zh => { if (!m.includes(zh)) m.push(zh); });
-  // Remove words answered correctly this session (even if also wrong earlier — re-queue means they were eventually mastered)
+  state.sessionWrong.forEach(zh   => { if (!m.includes(zh)) m.push(zh); });
   state.sessionCorrect.forEach(zh => { m = m.filter(x => x !== zh); });
   state.mistakes[state.tab] = m;
   S.set('mistakes_' + state.tab, m);
 }
 
 function startDrill() {
-  if (!state.mistakes[state.tab].length) return;
-  startQuiz('drill');
+  switchTab('mistakes');
 }
 
 function clearMistakes() {
-  state.mistakes[state.tab] = [];
-  S.set('mistakes_' + state.tab, []);
-  renderHome();
+  state.mistakes.ch7    = []; S.set('mistakes_ch7', []);
+  state.mistakes.review = []; S.set('mistakes_review', []);
+  switchTab(state.tab === 'mistakes' ? 'ch7' : state.tab);
 }
 
 // ── Result screen ─────────────────────────────────────────────────────────────
@@ -950,11 +1011,11 @@ function renderResult() {
       ${mode !== 'flash' ? `<div style="font-size:48px;font-weight:900;color:#3b82f6">${c}/${t}</div>` : ''}
       <div style="font-size:17px;color:#78716c;font-weight:600;margin:6px 0">${msg}</div>
       ${maxStreak >= 3 ? `<div style="font-size:13px;color:#3b82f6;font-weight:700">🔥 Best streak: ${maxStreak}</div>` : ''}
-      ${renderDots()}
+      ${state.tab !== 'mistakes' ? renderDots() : ''}
       ${allDone(state.tab) ? '<div style="font-size:13px;color:#4ade80;font-weight:800">🌟 All modes done!</div>' : ''}
-      ${state.mistakes[state.tab].length && mode !== 'drill' ? `
-        <button onclick="startDrill()" style="background:#fff5f5;border:2px solid #fca5a5!important;border-radius:16px;padding:12px 24px;font-size:14px;font-weight:800;color:#dc2626;width:100%;max-width:240px">
-          🔁 Drill ${state.mistakes[state.tab].length} Mistake${state.mistakes[state.tab].length!==1?'s':''}
+      ${totalMistakes() && state.tab !== 'mistakes' ? `
+        <button onclick="switchTab('mistakes')" style="background:#fff5f5;border:2px solid #fca5a5!important;border-radius:16px;padding:12px 24px;font-size:14px;font-weight:800;color:#dc2626;width:100%;max-width:260px">
+          🔁 Review ${totalMistakes()} Mistake${totalMistakes()!==1?'s':''}
         </button>` : ''}
       <div class="btn-row" style="margin-top:8px">
         <button class="btn-blue" onclick="startQuiz('${mode}')">Again</button>
