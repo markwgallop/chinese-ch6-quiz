@@ -164,6 +164,12 @@ const state = {
     ch7:    S.get('comp_ch7')    || {flash:false,choose:false,match:false,sentence:false,write:false},
     review: S.get('comp_review') || {flash:false,choose:false,match:false},
   },
+  mistakes: {
+    ch7:    S.get('mistakes_ch7')    || [],
+    review: S.get('mistakes_review') || [],
+  },
+  sessionWrong:   new Set(),
+  sessionCorrect: new Set(),
 };
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
@@ -356,6 +362,14 @@ function renderHome() {
             </div>
             ${state.completed[tab][m]?'<span style="font-size:20px">✅</span>':''}
           </button>`).join('')}
+        ${state.mistakes[tab].length ? `
+          <button class="mode-btn" onclick="startDrill()" style="border-color:#fca5a5!important;background:#fff5f5">
+            <div>
+              <div class="mode-btn-title" style="color:#dc2626">🔁 Drill Mistakes</div>
+              <div class="mode-btn-sub" style="color:#f87171">${state.mistakes[tab].length} word${state.mistakes[tab].length!==1?'s':''} to review</div>
+            </div>
+            <button onclick="event.stopPropagation();clearMistakes()" style="background:none;border:none;font-size:18px;color:#fca5a5;padding:4px" title="Clear mistakes">✕</button>
+          </button>` : ''}
       </div>
     </div>`;
 }
@@ -372,10 +386,19 @@ function startQuiz(mode) {
   state.score = {correct:0, total:0};
   state.streak = 0;
   state.maxStreak = 0;
+  state.sessionWrong   = new Set();
+  state.sessionCorrect = new Set();
   const vocab = currentVocab();
-  if (mode === 'flash' || mode === 'choose' || mode === 'write') state.queue = shuffle(vocab);
-  else if (mode === 'match') state.queue = [];
-  else state.queue = shuffle(SENTENCES).slice(0, 3);
+  if (mode === 'flash' || mode === 'choose' || mode === 'write') {
+    state.queue = shuffle(vocab);
+  } else if (mode === 'match') {
+    state.queue = [];
+  } else if (mode === 'drill') {
+    const mistakeWords = vocab.filter(w => state.mistakes[state.tab].includes(w.zh));
+    state.queue = shuffle(mistakeWords);
+  } else {
+    state.queue = shuffle(SENTENCES).slice(0, 3);
+  }
   renderQuiz();
 }
 
@@ -393,7 +416,7 @@ function renderQuiz() {
       </div>
       <div id="qa" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:16px"></div>
       <div style="font-size:12px;color:#d1d5db;font-weight:600" id="counter">
-        ${state.mode === 'match' ? 'Match all 5 pairs' : `${state.current+1} / ${state.queue.length}`}
+        ${state.mode === 'match' ? 'Match all 5 pairs' : state.mode === 'drill' ? `🔁 Drilling weak words` : `${state.current+1} / ${state.queue.length}`}
       </div>
     </div>`;
   renderQuestion();
@@ -409,6 +432,8 @@ function updateQuizHeader() {
   const ctr = el('counter');
   if (ctr) ctr.textContent = state.mode === 'match'
     ? 'Match all 5 pairs'
+    : state.mode === 'drill'
+    ? '🔁 Drilling weak words'
     : `${state.current+1} / ${state.queue.length}`;
 }
 
@@ -417,6 +442,7 @@ function renderQuestion() {
   const w = queue[current];
   if      (mode === 'flash')    renderFlash(w);
   else if (mode === 'choose')   renderChoose(w);
+  else if (mode === 'drill')    renderChoose(w);
   else if (mode === 'match')    renderMatch();
   else if (mode === 'sentence') renderSentence(w);
   else if (mode === 'write')    renderWrite(w);
@@ -726,14 +752,24 @@ function selfAssess(correct) {
 
 // ── Result handler ────────────────────────────────────────────────────────────
 function handleResult(correct) {
+  const w = state.queue[state.current];
   state.score.correct += correct ? 1 : 0;
   state.score.total++;
   if (correct) {
     state.streak++;
     if (state.streak > state.maxStreak) state.maxStreak = state.streak;
     if (state.streak > 0 && state.streak % 3 === 0) fireConfetti();
+    if (w?.zh) state.sessionCorrect.add(w.zh);
   } else {
     state.streak = 0;
+    if (w?.zh) {
+      state.sessionWrong.add(w.zh);
+      // Re-queue wrong answers in drill mode (up to 2 extra attempts)
+      if (state.mode === 'drill') {
+        const attempts = (w._attempts || 0) + 1;
+        if (attempts < 3) state.queue.push({...w, _attempts: attempts});
+      }
+    }
   }
   updateQuizHeader();
   const qLen = state.mode === 'match' ? 1 : state.queue.length;
@@ -741,14 +777,36 @@ function handleResult(correct) {
     const perfect = state.mode !== 'flash' && state.score.correct === state.score.total;
     saveSession(state.mode, state.score.correct, state.score.total);
     if (perfect) { audio.perfect(); vibrate([50,30,50,30,100]); fireConfetti(); }
-    markDone(state.mode);
+    if (state.mode !== 'drill') markDone(state.mode);
     addXp(state.mode === 'flash' ? 5 : perfect ? 20 : 10);
+    updateMistakes();
     setTimeout(renderResult, 400);
   } else {
     state.current++;
     updateQuizHeader();
     renderQuestion();
   }
+}
+
+function updateMistakes() {
+  let m = [...state.mistakes[state.tab]];
+  // Add newly wrong words
+  state.sessionWrong.forEach(zh => { if (!m.includes(zh)) m.push(zh); });
+  // Remove words answered correctly this session (even if also wrong earlier — re-queue means they were eventually mastered)
+  state.sessionCorrect.forEach(zh => { m = m.filter(x => x !== zh); });
+  state.mistakes[state.tab] = m;
+  S.set('mistakes_' + state.tab, m);
+}
+
+function startDrill() {
+  if (!state.mistakes[state.tab].length) return;
+  startQuiz('drill');
+}
+
+function clearMistakes() {
+  state.mistakes[state.tab] = [];
+  S.set('mistakes_' + state.tab, []);
+  renderHome();
 }
 
 // ── Result screen ─────────────────────────────────────────────────────────────
@@ -768,6 +826,10 @@ function renderResult() {
       ${maxStreak >= 3 ? `<div style="font-size:13px;color:#3b82f6;font-weight:700">🔥 Best streak: ${maxStreak}</div>` : ''}
       ${renderDots()}
       ${allDone(state.tab) ? '<div style="font-size:13px;color:#4ade80;font-weight:800">🌟 All modes done!</div>' : ''}
+      ${state.mistakes[state.tab].length && mode !== 'drill' ? `
+        <button onclick="startDrill()" style="background:#fff5f5;border:2px solid #fca5a5!important;border-radius:16px;padding:12px 24px;font-size:14px;font-weight:800;color:#dc2626;width:100%;max-width:240px">
+          🔁 Drill ${state.mistakes[state.tab].length} Mistake${state.mistakes[state.tab].length!==1?'s':''}
+        </button>` : ''}
       <div class="btn-row" style="margin-top:8px">
         <button class="btn-blue" onclick="startQuiz('${mode}')">Again</button>
         <button class="btn-purple" onclick="renderHome()">Menu</button>
