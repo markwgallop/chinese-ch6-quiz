@@ -65,6 +65,12 @@ canvas{display:block;touch-action:none;cursor:crosshair}
 @keyframes popIn{0%{transform:scale(0.6);opacity:0}100%{transform:scale(1);opacity:1}}
 .bounce-in{animation:bounceIn 0.4s cubic-bezier(.34,1.56,.64,1)}
 .pop-in{animation:popIn 0.3s cubic-bezier(.34,1.56,.64,1)}
+.mic-btn{width:96px;height:96px;border-radius:50%;font-size:40px;display:flex;align-items:center;justify-content:center;background:#eff6ff;border:3px solid #bfdbfe!important;box-shadow:0 4px 20px rgba(59,130,246,0.15);transition:all 0.2s}
+.mic-btn.listening{background:#fee2e2;border-color:#f87171!important;animation:pulse 1s ease-in-out infinite}
+.mic-result{border-radius:20px;padding:16px 24px;text-align:center;width:100%}
+.mic-result.correct{background:#dcfce7;border:3px solid #4ade80!important}
+.mic-result.wrong{background:#fee2e2;border:3px solid #f87171!important}
+@keyframes pulse{0%,100%{box-shadow:0 4px 20px rgba(239,68,68,0.2)}50%{box-shadow:0 4px 32px rgba(239,68,68,0.5)}}
 </style>
 </head>
 <body>
@@ -133,10 +139,10 @@ const VOCAB_REVIEW = [
   {zh:"不少",        py:"bù shǎo",                en:"not a few"},
 ];
 
-const MODES_CH7   = ['flash','choose','match','sentence','write'];
+const MODES_CH7   = ['flash','choose','match','sentence','write','speak'];
 const MODES_REVIEW = ['flash','choose','match'];
-const MODE_LABELS  = {flash:"🃏 Flash Cards", choose:"🎯 Pick Meaning", match:"🔗 Match Pairs", sentence:"📖 Sentences", write:"✍️ Write It"};
-const MODE_DESC    = {flash:"Tap to flip & hear", choose:"4 choices", match:"Connect 5 pairs", sentence:"Full phrases", write:"Draw the character"};
+const MODE_LABELS  = {flash:"🃏 Flash Cards", choose:"🎯 Pick Meaning", match:"🔗 Match Pairs", sentence:"📖 Sentences", write:"✍️ Write It", speak:"🎤 Say It"};
+const MODE_DESC    = {flash:"Tap to flip & hear", choose:"4 choices", match:"Connect 5 pairs", sentence:"Full phrases", write:"Draw the character", speak:"Speak the Chinese word"};
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 const S = {
@@ -161,7 +167,7 @@ const state = {
     review: S.get('xp_review') || 0,
   },
   completed: {
-    ch7:    S.get('comp_ch7')    || {flash:false,choose:false,match:false,sentence:false,write:false},
+    ch7:    S.get('comp_ch7')    || {flash:false,choose:false,match:false,sentence:false,write:false,speak:false},
     review: S.get('comp_review') || {flash:false,choose:false,match:false},
   },
   mistakes: {
@@ -348,7 +354,7 @@ function renderHome() {
       <div style="text-align:center">
         <h1 style="font-size:26px;font-weight:900;color:#1c1917">${tab==='ch7'?'第七课':'复习'}</h1>
         <p style="font-size:13px;color:#78716c;margin-top:2px">${tab==='ch7'
-          ? 'Chapter 7 · 10 words · 5 sentences'
+          ? 'Chapter 7 · 10 words · 5 sentences · 6 modes'
           : 'Review · 37 words from earlier chapters'}</p>
       </div>
       ${renderDots()}
@@ -389,7 +395,7 @@ function startQuiz(mode) {
   state.sessionWrong   = new Set();
   state.sessionCorrect = new Set();
   const vocab = currentVocab();
-  if (mode === 'flash' || mode === 'choose' || mode === 'write') {
+  if (mode === 'flash' || mode === 'choose' || mode === 'write' || mode === 'speak') {
     state.queue = shuffle(vocab);
   } else if (mode === 'match') {
     state.queue = [];
@@ -446,6 +452,7 @@ function renderQuestion() {
   else if (mode === 'match')    renderMatch();
   else if (mode === 'sentence') renderSentence(w);
   else if (mode === 'write')    renderWrite(w);
+  else if (mode === 'speak')    renderSpeak(w);
 }
 
 // ── Flash ─────────────────────────────────────────────────────────────────────
@@ -748,6 +755,125 @@ function selfAssess(correct) {
   if (correct) { audio.correct(); vibrate([30,20,30]); }
   else         { audio.wrong();   vibrate([80,30,80]); }
   setTimeout(() => handleResult(correct), 600);
+}
+
+// ── Speak ─────────────────────────────────────────────────────────────────────
+let micRecognizer = null;
+
+const normZh = s => s.replace(/[\s。！？，、．.!?,]/g, '');
+
+function renderSpeak(w) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  el('qa').innerHTML = `
+    <div class="card">
+      <div class="card-label">Say this in Chinese</div>
+      <div style="font-size:26px;font-weight:800;color:#3b82f6">${w.en}</div>
+      <div style="margin-top:8px">${renderPinyin(w.py)}</div>
+      <div style="margin-top:6px">${speakBtn(w.zh)}</div>
+    </div>
+    ${SR
+      ? `<button id="mic-btn" class="mic-btn" onclick="startListening()">🎤</button>
+         <div id="mic-status" style="font-size:13px;color:#9ca3af;font-weight:600;text-align:center">Tap the mic and say it</div>`
+      : `<div style="background:#fff3cd;border:2px solid #fbbf24;border-radius:16px;padding:16px;text-align:center;font-size:13px;color:#92400e;font-weight:700">
+           Speech recognition not supported in this browser.<br>Try Chrome on Android or Safari on iOS 14.5+.
+         </div>`
+    }`;
+}
+
+function startListening() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+
+  // Cancel any running recognizer
+  if (micRecognizer) { try { micRecognizer.abort(); } catch {} }
+
+  const r = new SR();
+  micRecognizer = r;
+  r.lang = 'zh-CN';
+  r.interimResults = false;
+  r.maxAlternatives = 5;
+
+  const btn = el('mic-btn');
+  const status = el('mic-status');
+  if (btn) { btn.classList.add('listening'); btn.textContent = '🔴'; btn.onclick = null; }
+  if (status) status.textContent = 'Listening…';
+
+  r.onresult = e => {
+    micRecognizer = null;
+    const w = state.queue[state.current];
+    const target = normZh(w.zh);
+    const alts = Array.from(e.results[0]).map(a => normZh(a.transcript));
+    const ok = alts.some(t => t === target);
+    showSpeakResult(ok, alts[0], w);
+  };
+
+  r.onerror = e => {
+    micRecognizer = null;
+    if (btn) { btn.classList.remove('listening'); btn.textContent = '🎤'; btn.onclick = startListening; }
+    const msgs = {
+      'no-speech':        'No speech detected — try again',
+      'not-allowed':      'Microphone blocked — check browser permissions',
+      'network':          'Network error — speech recognition needs internet',
+      'language-not-supported': 'Chinese not supported on this device',
+    };
+    if (status) status.textContent = msgs[e.error] || `Error: ${e.error}`;
+  };
+
+  r.onend = () => {
+    // If onresult didn't fire (e.g. aborted), reset button
+    if (micRecognizer === r) micRecognizer = null;
+    if (btn && btn.classList.contains('listening')) {
+      btn.classList.remove('listening'); btn.textContent = '🎤'; btn.onclick = startListening;
+    }
+  };
+
+  try { r.start(); } catch(e) {
+    if (status) status.textContent = 'Could not start microphone';
+  }
+}
+
+function showSpeakResult(ok, heard, w) {
+  if (ok) { audio.correct(); vibrate([30,20,30]); }
+  else    { audio.wrong();   vibrate([80,30,80]); }
+
+  const micArea = el('mic-btn')?.parentNode;
+  // Replace the mic button + status with the result
+  const resultHTML = `
+    <div class="mic-result ${ok ? 'correct' : 'wrong'} pop-in">
+      <div style="font-size:28px;margin-bottom:6px">${ok ? '✅' : '❌'}</div>
+      <div class="zh" style="font-size:36px">${w.zh}</div>
+      <div style="font-size:13px;margin-top:4px;color:#6b7280">You said: <strong>${heard || '—'}</strong></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn-gray" onclick="startListening_after(${JSON.stringify(ok)})">Try again</button>
+      <button class="btn-blue" onclick="commitSpeak(${ok})">Next →</button>
+    </div>`;
+
+  // Remove mic-btn and mic-status nodes, insert result
+  const qa = el('qa');
+  // Remove last two children (mic-btn, mic-status) and append result
+  while (qa.children.length > 1) qa.removeChild(qa.lastChild);
+  const div = document.createElement('div');
+  div.style.cssText = 'width:100%;display:flex;flex-direction:column;align-items:center;gap:16px';
+  div.innerHTML = resultHTML;
+  qa.appendChild(div);
+}
+
+function startListening_after(prevOk) {
+  // Re-render the mic button area so user can retry without advancing
+  const qa = el('qa');
+  while (qa.children.length > 1) qa.removeChild(qa.lastChild);
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const div = document.createElement('div');
+  div.style.cssText = 'width:100%;display:flex;flex-direction:column;align-items:center;gap:16px';
+  div.innerHTML = `<button id="mic-btn" class="mic-btn" onclick="startListening()">🎤</button>
+    <div id="mic-status" style="font-size:13px;color:#9ca3af;font-weight:600;text-align:center">Tap to try again</div>`;
+  qa.appendChild(div);
+  setTimeout(startListening, 100);
+}
+
+function commitSpeak(correct) {
+  setTimeout(() => handleResult(correct), 100);
 }
 
 // ── Result handler ────────────────────────────────────────────────────────────
